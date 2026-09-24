@@ -1,0 +1,39 @@
+// Vulnerable Node.js API Lab — Prisma schema
+//
+// SQLite does not support native enums, so `role` is a plain String with the
+// allowed values documented on the field. The app-level type is the
+// TypeScript union `'USER' | 'ADMIN'`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  // Allowed values: "USER" | "ADMIN" (no native enum support on SQLite).
+  role         String   @default("USER")
+  resetToken   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  notes        Note[]
+}
+
+model Note {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}

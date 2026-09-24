@@ -1,0 +1,310 @@
+/**
+ * The same three requests against `LAB_MODE=secure`, asserting each fix holds
+ * and that the fix did not break the legitimate path next to it.
+ */
+import request from 'supertest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  expectErrorEnvelope,
+  expectNoLeakedInternals,
+  expectPublicUserShape,
+} from './helpers/assertions';
+import { makeApp } from './helpers/app';
+import { ALICE, BOB, authHeader, createNote, registerUser, type AuthedUser } from './helpers/auth';
+import { ensureTestDatabase, prisma, resetDb } from './helpers/db';
+import { errorHandler } from './helpers/error-handler';
+
+const app = makeApp('secure');
+
+const BOB_SECRET_TITLE = 'Bob’s private note';
+const BOB_SECRET_CONTENT = 'Bank PIN is 0000 — fictional lab data, not a real secret.';
+const ALICE_NOTE_CONTENT = 'Alice’s own note, which she is allowed to read.';
+const ALICE_RESET_TOKEN = 'lab-not-a-real-secret-reset-token-alice';
+
+let alice: AuthedUser;
+let bob: AuthedUser;
+let aliceNoteId: number;
+let bobNoteId: number;
+
+beforeAll(async () => {
+  await ensureTestDatabase();
+});
+
+beforeEach(async () => {
+  await resetDb();
+
+  alice = await registerUser(app, ALICE);
+  bob = await registerUser(app, BOB);
+
+  await prisma.user.update({
+    where: { id: alice.user.id },
+    data: { resetToken: ALICE_RESET_TOKEN },
+  });
+
+  aliceNoteId = (
+    await createNote(app, alice.token, { title: 'Alice’s note', content: ALICE_NOTE_CONTENT })
+  ).id;
+  bobNoteId = (
+    await createNote(app, bob.token, { title: BOB_SECRET_TITLE, content: BOB_SECRET_CONTENT })
+  ).id;
+});
+
+describe('S1 — the IDOR is closed: a note lookup is scoped to its owner', () => {
+  it('answers 404 when Alice asks for Bob’s note id', async () => {
+    const res = await request(app)
+      .get(`/api/notes/${bobNoteId}`)
+      .set('Authorization', authHeader(alice.token));
+
+    expect(res.status).toBe(404);
+    expectErrorEnvelope(res.body, 'NOT_FOUND');
+  });
+
+  it('returns none of Bob’s data in the rejection body', async () => {
+    const res = await request(app)
+      .get(`/api/notes/${bobNoteId}`)
+      .set('Authorization', authHeader(alice.token));
+
+    expect(res.text).not.toContain(BOB_SECRET_CONTENT);
+    expect(res.text).not.toContain(BOB_SECRET_TITLE);
+    expect(res.text).not.toContain(bob.user.email);
+  });
+
+  it('uses 404 rather than 403, so the status code is not an id oracle', async () => {
+    const existingButNotMine = await request(app)
+      .get(`/api/notes/${bobNoteId}`)
+      .set('Authorization', authHeader(alice.token));
+    const doesNotExist = await request(app)
+      .get(`/api/notes/${bobNoteId + 9999}`)
+      .set('Authorization', authHeader(alice.token));
+
+    expect(existingButNotMine.status).toBe(404);
+    expect(doesNotExist.status).toBe(404);
+    expect(existingButNotMine.body).toEqual(doesNotExist.body);
+  });
+
+  it('still serves Alice her own note: the fix does not break the happy path', async () => {
+    const res = await request(app)
+      .get(`/api/notes/${aliceNoteId}`)
+      .set('Authorization', authHeader(alice.token));
+
+    expect(res.status).toBe(200);
+    expect(res.body.note).toMatchObject({
+      id: aliceNoteId,
+      content: ALICE_NOTE_CONTENT,
+      userId: alice.user.id,
+    });
+  });
+
+  it('leaves Bob able to read his own note', async () => {
+    const res = await request(app)
+      .get(`/api/notes/${bobNoteId}`)
+      .set('Authorization', authHeader(bob.token));
+
+    expect(res.status).toBe(200);
+    expect(res.body.note.content).toBe(BOB_SECRET_CONTENT);
+  });
+});
+
+describe('S2 — mass assignment is blocked by a strict schema', () => {
+  it('rejects {"role":"ADMIN"} with 400 VALIDATION_ERROR naming the unknown key', async () => {
+    const res = await request(app)
+      .patch('/api/users/me')
+      .set('Authorization', authHeader(alice.token))
+      .send({ role: 'ADMIN' });
+
+    expect(res.status).toBe(400);
+    expectErrorEnvelope(res.body, 'VALIDATION_ERROR');
+    expect(res.body.error.details.some((detail: any) => detail.path === 'role')).toBe(true);
+  });
+
+  it('leaves the stored role as USER after the blocked escalation attempt', async () => {
+    await request(app)
+      .patch('/api/users/me')
+      .set('Authorization', authHeader(alice.token))
+      .send({ role: 'ADMIN' });
+
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: alice.user.id } });
+    expect(stored.role).toBe('USER');
+  });
+
+  it('rejects the decoy payload {"name":"Mallory","role":"ADMIN"} entirely — the name is not applied either', async () => {
+    const res = await request(app)
+      .patch('/api/users/me')
+      .set('Authorization', authHeader(alice.token))
+      .send({ name: 'Mallory', role: 'ADMIN' });
+
+    expect(res.status).toBe(400);
+    expectErrorEnvelope(res.body, 'VALIDATION_ERROR');
+
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: alice.user.id } });
+    expect(stored).toMatchObject({ name: 'Alice', role: 'USER' });
+  });
+
+  it('still accepts the legitimate update {"name":"Alice2"} and returns a public user', async () => {
+    const res = await request(app)
+      .patch('/api/users/me')
+      .set('Authorization', authHeader(alice.token))
+      .send({ name: 'Alice2' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.name).toBe('Alice2');
+    expect(res.body.user.role).toBe('USER');
+    expectPublicUserShape(res.body.user);
+
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: alice.user.id } });
+    expect(stored.name).toBe('Alice2');
+    expect(stored.role).toBe('USER');
+  });
+
+  it('rejects an empty body {} with 400 instead of writing nothing quietly', async () => {
+    const res = await request(app)
+      .patch('/api/users/me')
+      .set('Authorization', authHeader(alice.token))
+      .send({});
+
+    expect(res.status).toBe(400);
+    expectErrorEnvelope(res.body, 'VALIDATION_ERROR');
+  });
+});
+
+describe('S3 — the response is an explicit DTO, not the database row', () => {
+  it('returns exactly [createdAt, email, id, name, role] from GET /api/users/me', async () => {
+    const res = await request(app)
+      .get('/api/users/me')
+      .set('Authorization', authHeader(alice.token));
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.user).sort()).toEqual(['createdAt', 'email', 'id', 'name', 'role']);
+  });
+
+  it('omits passwordHash and resetToken even though both exist on the row', async () => {
+    const res = await request(app)
+      .get('/api/users/me')
+      .set('Authorization', authHeader(alice.token));
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: alice.user.id } });
+
+    expect(stored.passwordHash).toBeTruthy();
+    expect(stored.resetToken).toBe(ALICE_RESET_TOKEN);
+    expect(res.body.user).not.toHaveProperty('passwordHash');
+    expect(res.body.user).not.toHaveProperty('resetToken');
+    expect(res.text).not.toContain(stored.passwordHash);
+    expect(res.text).not.toContain(ALICE_RESET_TOKEN);
+  });
+
+  it('keeps PATCH /api/users/me on the same clean shape', async () => {
+    const res = await request(app)
+      .patch('/api/users/me')
+      .set('Authorization', authHeader(alice.token))
+      .send({ name: 'Alice2' });
+
+    expectPublicUserShape(res.body.user);
+  });
+});
+
+describe('S4 — errors report a code, never the server’s internals', () => {
+  it('answers malformed JSON with 400 INVALID_JSON, not a parser crash', async () => {
+    const res = await request(app)
+      .post('/api/auth/register')
+      .set('Content-Type', 'application/json')
+      .send('{"broken":');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: { message: 'Request body is not valid JSON', code: 'INVALID_JSON' },
+    });
+    expectNoLeakedInternals(res.body);
+    expect(res.text).not.toContain('SyntaxError');
+  });
+
+  it('refuses a body over the 100 kB limit with 413 PAYLOAD_TOO_LARGE', async () => {
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({
+        name: 'x'.repeat(200_000),
+        email: 'oversized@example.local',
+        password: 'Password123!',
+      });
+
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({
+      error: { message: 'Request body is too large', code: 'PAYLOAD_TOO_LARGE' },
+    });
+    expectNoLeakedInternals(res.body);
+
+    const stored = await prisma.user.findUnique({ where: { email: 'oversized@example.local' } });
+    expect(stored).toBeNull();
+  });
+
+  it('enforces the limit before any handler runs, on authenticated routes too', async () => {
+    const res = await request(app)
+      .post('/api/notes')
+      .set('Authorization', authHeader(alice.token))
+      .send({ title: 'Oversized', content: 'y'.repeat(200_000) });
+
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+    await expect(prisma.note.count({ where: { title: 'Oversized' } })).resolves.toBe(0);
+  });
+
+  // No legitimate request can force a 500 any more (that is the point), so the
+  // unrecognised-error branch is exercised directly: it must answer with the
+  // static envelope and push the stack to stderr only.
+  it('falls back to a generic 500 envelope for an unrecognised failure, logging the stack to stderr only', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const captured: { status?: number; body?: unknown } = {};
+    const res = {
+      status(code: number) {
+        captured.status = code;
+        return this;
+      },
+      json(body: unknown) {
+        captured.body = body;
+        return this;
+      },
+    } as any;
+
+    const boom = new Error('connection pool exhausted at /srv/app/db.ts:42');
+    errorHandler(boom, {} as any, res, (() => {}) as any);
+
+    expect(captured.status).toBe(500);
+    expect(captured.body).toEqual({
+      error: { message: 'Internal server error', code: 'INTERNAL_ERROR' },
+    });
+    expectNoLeakedInternals(captured.body);
+    expect(JSON.stringify(captured.body)).not.toContain('connection pool');
+    expect(logged).toHaveBeenCalledWith(boom);
+
+    logged.mockRestore();
+  });
+
+  it('returns the standard 404 envelope for an unknown route', async () => {
+    const res = await request(app).get('/api/definitely-not-a-route');
+
+    expect(res.status).toBe(404);
+    expectErrorEnvelope(res.body, 'NOT_FOUND');
+  });
+
+  it('keeps every error body to the { error: { message, code, details? } } envelope', async () => {
+    const responses = [
+      await request(app).get('/api/users/me'),
+      await request(app).get('/api/nope'),
+      await request(app)
+        .patch('/api/users/me')
+        .set('Authorization', authHeader(alice.token))
+        .send({ role: 'ADMIN' }),
+      await request(app)
+        .get(`/api/notes/${bobNoteId}`)
+        .set('Authorization', authHeader(alice.token)),
+      await request(app)
+        .post('/api/auth/register')
+        .set('Content-Type', 'application/json')
+        .send('{"broken":'),
+    ];
+
+    for (const res of responses) {
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expectErrorEnvelope(res.body);
+      expect(res.text).not.toContain(process.cwd());
+    }
+  });
+});

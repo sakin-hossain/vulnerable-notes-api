@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# ⚠️  EDUCATIONAL SECURITY LAB
+#
+# The port below is deliberately published on 127.0.0.1 only, so the
+# intentionally vulnerable API is reachable from this machine and nowhere else.
+# Do not change it to "3000:3000" (which listens on every interface) and do not
+# run this stack on a public host.
+#
+# Both services are profile-gated, so `docker compose up` on its own starts
+# nothing rather than silently handing you the vulnerable build:
+#   docker compose --profile vulnerable up   ->  http://127.0.0.1:3000
+#   docker compose --profile secure up       ->  http://127.0.0.1:3001
+# ---------------------------------------------------------------------------
+services:
+  lab-vulnerable:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vuln-notes-api-vulnerable
+    # Gated behind a profile so a bare `docker compose up` can never start the
+    # insecure build by accident:  docker compose --profile vulnerable up
+    profiles: ['vulnerable']
+    environment:
+      DATABASE_URL: 'file:/app/data/lab.db'
+      JWT_SECRET: 'lab-only-not-a-real-secret-change-me'
+      JWT_EXPIRES_IN: '1h'
+      LAB_MODE: ${LAB_MODE:-vulnerable}
+      NODE_ENV: 'development'
+      HOST: '0.0.0.0'
+      PORT: '3000'
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - lab-vulnerable-data:/app/data
+    restart: 'no'
+
+  # Same image, secure code paths, different port — handy for side-by-side demos:
+  #   docker compose --profile secure up
+  lab-secure:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vuln-notes-api-secure
+    profiles: ['secure']
+    environment:
+      DATABASE_URL: 'file:/app/data/lab.db'
+      JWT_SECRET: 'lab-only-not-a-real-secret-change-me'
+      JWT_EXPIRES_IN: '1h'
+      LAB_MODE: 'secure'
+      NODE_ENV: 'production'
+      HOST: '0.0.0.0'
+      PORT: '3000'
+    ports:
+      - '127.0.0.1:3001:3000'
+    volumes:
+      - lab-secure-data:/app/data
+    restart: 'no'
+
+volumes:
+  lab-vulnerable-data:
+  lab-secure-data:
