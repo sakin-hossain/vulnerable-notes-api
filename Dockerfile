@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Vulnerable Node.js API Lab — container image
+# Vulnerable Notes API — container image
 #
 # ⚠️  This image is a LAB image, not a production image. When LAB_MODE is
 #     "vulnerable" it serves deliberately insecure endpoints. Only ever run it

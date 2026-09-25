@@ -1,7 +1,10 @@
-# Task queue — Vulnerable Node.js API Lab
+# Task queue — Vulnerable Notes API
 
-Spec: `docs/specs/001-vulnerable-node-api-lab.md` (read it before starting any task).
-Repo root: `/Users/sakinhossain/Documents/Learning/youtube/first-proj`
+> **Internal build log.** This is the task queue the project was built from, kept for
+> provenance. It is not part of the lab material — start at [the README](../README.md)
+> or [docs/vulnerabilities.md](vulnerabilities.md).
+> Spec: `docs/specs/001-vulnerable-notes-api.md` (read it before starting any task).
+> Repo root: the repository root.
 
 **Statuses:** `PLANNED` → `IN_PROGRESS` → `IN_REVIEW` → `DONE` (or `BLOCKED`).
 
@@ -98,14 +101,14 @@ initial migration, and an idempotent seed with Alice, Bob, and three fictional n
 ### T-004 — JWT utilities & auth middleware
 
 **Status:** DONE
-**Notes:** Reopened and fixed after the tester found T-004 acceptance criteria unmet: the token payload was `{ sub, email, role }` and verification pinned only the algorithm. Now the payload is `{ sub }` alone (no PII, no stale role in an unexpired token) and both `algorithms: [HS256]` and `issuer: vulnerable-node-api-lab` are pinned on verify. `requireAdmin` is kept but documented in-code as intentionally unmounted — this lab has no admin-only route, so ADMIN grants no capability.
+**Notes:** Reopened and fixed after the tester found T-004 acceptance criteria unmet: the token payload was `{ sub, email, role }` and verification pinned only the algorithm. Now the payload is `{ sub }` alone (no PII, no stale role in an unexpired token) and both `algorithms: [HS256]` and `issuer: vulnerable-notes-api` are pinned on verify. `requireAdmin` is kept but documented in-code as intentionally unmounted — this lab has no admin-only route, so ADMIN grants no capability.
 **Notes:** jwt.ts + middleware/auth.ts done. `requireAuth` re-reads id/email/role from the database each request, so the V2 escalation shows up on the very next call without re-login. `requireUser(req)` helper avoids `!` assertions; `requireAdmin` exists for the privilege-escalation payoff. No LAB_MODE branching in either file.
 **Depends on:** T-003
 **Scope:** `signToken`/`verifyToken` and `requireAuth`. Correct and identical in both
 lab modes — this is the "what we got right" material.
 **Acceptance criteria:**
 
-- [ ] HS256, secret from env, `expiresIn` from env, `issuer: 'vulnerable-node-api-lab'`,
+- [ ] HS256, secret from env, `expiresIn` from env, `issuer: 'vulnerable-notes-api'`,
       `subject: user.id`; payload carries no PII and no secrets.
 - [ ] `verifyToken` pins `{ algorithms: ['HS256'], issuer }`.
 - [ ] `requireAuth` rejects missing/malformed `Authorization`, bad signature, expired, and

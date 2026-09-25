@@ -1,4 +1,4 @@
-// Vulnerable Node.js API Lab — Prisma schema
+// Vulnerable Notes API — Prisma schema
 //
 // SQLite does not support native enums, so `role` is a plain String with the
 // allowed values documented on the field. The app-level type is the

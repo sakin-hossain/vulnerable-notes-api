@@ -14,7 +14,7 @@ import { ensureTestDatabase, prisma, resetDb } from './helpers/db';
 const app = makeApp('vulnerable');
 
 const BOB_SECRET_TITLE = 'Bob’s private note';
-const BOB_SECRET_CONTENT = 'Bank PIN is 0000 — fictional lab data, not a real secret.';
+const BOB_SECRET_CONTENT = 'Private release notes — production migration scheduled Friday.';
 const ALICE_NOTE_CONTENT = 'Alice’s own note, which she is allowed to read.';
 const ALICE_RESET_TOKEN = 'lab-not-a-real-secret-reset-token-alice';
 

@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     data: [
       {
         title: 'Private project notes',
-        content: 'Ideas for a side project, still early.',
+        content: 'Private release notes — production migration scheduled Friday.',
         userId: bob.id,
       },
       {

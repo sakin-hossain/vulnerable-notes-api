@@ -5,7 +5,7 @@ import { env } from '../config/env';
 // authorization and data exposure, not broken authentication. A future lab in
 // the series covers JWT-specific flaws; nothing here is weakened on purpose.
 
-const ISSUER = 'vulnerable-node-api-lab';
+const ISSUER = 'vulnerable-notes-api';
 
 // The token carries an identifier and nothing else. Name, email and role are
 // read from the database on each request, so putting them in the payload would

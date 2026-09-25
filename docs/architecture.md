@@ -165,7 +165,7 @@ Authentication is **correct and identical in both modes**. It is not where the v
 ```typescript
 // src/utils/jwt.ts
 
-const ISSUER = 'vulnerable-node-api-lab';
+const ISSUER = 'vulnerable-notes-api';
 
 export function signAccessToken(user: { id: number }): string {
   const options = {
@@ -183,7 +183,7 @@ Key details:
 - **HS256 only** — No algorithm negotiation, no `alg: none`
 - **Secret ≥32 characters** — Enforced in env.ts via Zod
 - **Expiry from env** — Default `1h`, configurable
-- **Issuer pinned** — `vulnerable-node-api-lab` for scoping
+- **Issuer pinned** — `vulnerable-notes-api` for scoping
 - **No PII in payload** — the token carries `sub` and nothing else. Name, email and
   role are read from the database on each request, so they never sit in a value the
   client can decode, and a stale role cannot linger inside an unexpired token.

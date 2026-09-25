@@ -1,591 +1,268 @@
-# Vulnerable Node.js API Lab
+# Vulnerable Notes API
 
-> **WARNING — EDUCATIONAL SECURITY LAB**
+A small, intentionally insecure Node.js + TypeScript REST API that demonstrates three real application-security bugs — and their fixes — from the perspective of the developer who writes them.
+
+> ### ⚠️ EDUCATIONAL SECURITY LAB
 >
-> This repository contains **intentionally vulnerable code** designed for teaching purposes only. The vulnerabilities documented here are deliberately introduced and must NOT be deployed to production or any system you do not own and control.
+> This repository **intentionally contains insecure code**. The vulnerabilities are deliberate and documented.
 >
-> - **Never** run the vulnerable build (`LAB_MODE=vulnerable`) on a public-facing server or internet-connected machine.
-> - **Only** run it on `127.0.0.1` on a machine you own completely.
-> - **Do not** use this code as a template for real applications.
-> - If you discover an **unintended** vulnerability, see [SECURITY.md](SECURITY.md).
+> - Run the vulnerable build **only** on `127.0.0.1`, on a machine you own and control.
+> - **Never** deploy it to a public-facing server or any internet-connected host.
+> - **Never** use these techniques against systems you do not own or are not authorised to test.
+> - Do not use this code as a template for a real application.
+>
+> Found a bug that is _not_ one of the three documented ones? See [SECURITY.md](SECURITY.md).
 
 ---
 
-## Overview
+## Vulnerabilities demonstrated
 
-**Vulnerable Node.js API Lab** is a small, intentionally insecure REST API that teaches developers how real security vulnerabilities work and how to fix them. It demonstrates three common authorization and data-exposure bugs from the perspective of a working developer under deadline — mistakes that are easy to make but critical to understand.
+Each one is a few lines of code, paired with its secure fix and selected at runtime by `LAB_MODE`.
 
-The lab is part of the **Cybersecurity for Developers** YouTube series.
+| #      | Vulnerability                            | Endpoint              | OWASP API Top 10 | The mistake                                                             |
+| ------ | ---------------------------------------- | --------------------- | ---------------- | ----------------------------------------------------------------------- |
+| **V1** | Broken Object Level Authorization (IDOR) | `GET /api/notes/:id`  | API1:2023        | The note is looked up by id alone — ownership is never checked          |
+| **V2** | Mass Assignment / privilege escalation   | `PATCH /api/users/me` | API3:2023        | `req.body` is passed straight into `prisma.user.update`                 |
+| **V3** | Excessive Data Exposure                  | `GET /api/users/me`   | API3:2023        | The raw Prisma row is returned, leaking `passwordHash` and `resetToken` |
 
-### The three vulnerabilities
+Full write-ups — root cause, reproduction, impact, fix — are in **[docs/vulnerabilities.md](docs/vulnerabilities.md)**.
 
-| Vulnerability                                    | Endpoint              | OWASP Ref | Issue                                                                   |
-| ------------------------------------------------ | --------------------- | --------- | ----------------------------------------------------------------------- |
-| **V1: Broken Object Level Authorization (IDOR)** | `GET /api/notes/:id`  | API1:2023 | User can read another user's notes by guessing the note ID              |
-| **V2: Mass Assignment / Privilege Escalation**   | `PATCH /api/users/me` | API3:2023 | Client can escalate their role to `ADMIN` by sending `{"role":"ADMIN"}` |
-| **V3: Excessive Data Exposure**                  | `GET /api/users/me`   | API3:2023 | Password hash and reset token are leaked in the response                |
+### What is deliberately _not_ vulnerable
 
-Each vulnerability is 2–8 lines of code, readable on camera, paired with its secure fix.
+Everything else is implemented correctly, on purpose. The lesson is authorization and serialization, not broken authentication.
 
-### What is NOT vulnerable
-
-The following are implemented correctly:
-
-- **JWT authentication** — HS256 pinning, proper expiry, secrets from environment
-- **Password hashing** — bcrypt with configurable cost, no plaintext passwords
-- **Login security** — identical error messages for unknown email and wrong password on login (no enumeration via login)
-- **Note ownership** — enforced on note routes themselves (list/update/delete) in both modes; in vulnerable mode V2 can still re-parent notes via nested relation writes
-- **Validation** — strict schemas with type safety via Zod
-- **Error handling** — no stack traces leaked over HTTP in either mode
-- **Server binding** — defaults to `127.0.0.1`; under Docker, safety comes from the loopback publish prefix
-
----
-
-## Tech Stack
-
-- **Node.js** 20 LTS+ (CommonJS)
-- **TypeScript** 5.9 (strict mode)
-- **Express** 5.2
-- **Prisma** 6.19 + SQLite
-- **Zod** 4.6 (validation)
-- **bcrypt** 6.0 (password hashing)
-- **jsonwebtoken** 9.0 (JWT signing/verification)
-- **Vitest** 3.2 + Supertest (testing)
-- **Docker** (multi-stage build)
+- **JWT** — HS256 with the algorithm _and_ issuer pinned, proper expiry, secret from the environment, payload carries only a subject
+- **Passwords** — bcrypt in both modes, never stored in plaintext
+- **Login** — an unknown email and a wrong password return the identical 401 (no user enumeration)
+- **Note ownership** — list, update and delete are scoped to the authenticated user in both modes
+- **Note creation** — `userId` comes from the verified token; a spoofed `userId` in the body is rejected
+- **Errors** — centralized handling; no stack trace or file path ever reaches an HTTP response
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-
-- Node.js 20+
-- pnpm (or npm/yarn)
-
-### Installation
+**Prerequisites:** Node.js 20+, [pnpm](https://pnpm.io/installation), and Git.
 
 ```bash
-git clone <repo-url>
-cd vulnerable-node-api-lab
+git clone https://github.com/sakin-hossain/vulnerable-notes-api.git
+cd vulnerable-notes-api
 
-# Install dependencies
 pnpm install
-
-# Copy the example environment file
 cp .env.example .env
+pnpm db:reset          # creates the SQLite database and seeds Alice and Bob
 
-# Initialize the database and seed it with test users
-pnpm db:reset
-
-# Start the lab
-pnpm dev
+pnpm lab:vulnerable    # http://127.0.0.1:3000
 ```
 
-The server will start on `http://127.0.0.1:3000`.
-
-Check the server health:
+Confirm which build is live at any time:
 
 ```bash
 curl http://127.0.0.1:3000/health
+# {"status":"ok","labMode":"vulnerable"}
 ```
 
-Expected output:
+> The API has no frontend and no `/` route by design, so opening `http://127.0.0.1:3000` in a browser returns a `404` envelope. That is expected — use `curl`, Postman, or Burp Repeater. `/health` is the only route a browser can usefully open.
 
-```json
-{ "status": "ok", "labMode": "vulnerable" }
-```
+### Seed accounts
 
-Note: The output is `"vulnerable"` because the Quick Start copies `.env.example`, which explicitly sets `LAB_MODE="vulnerable"` to opt in to the vulnerable build. If `LAB_MODE` is unset, the lab defaults to `"secure"` (fail-closed).
+Lab-only credentials. Both users have the same password.
 
-### Seed Accounts
+| User  | Email                 | Password       | User id | Owns notes  |
+| ----- | --------------------- | -------------- | ------- | ----------- |
+| Alice | `alice@example.local` | `Password123!` | 1       | **1, 2, 3** |
+| Bob   | `bob@example.local`   | `Password123!` | 2       | **4, 5, 6** |
 
-Two test accounts are created by `pnpm db:reset`:
-
-| Email                 | Password       | User ID | Owns Notes |
-| --------------------- | -------------- | ------- | ---------- |
-| `alice@example.local` | `Password123!` | 1       | 1, 2, 3    |
-| `bob@example.local`   | `Password123!` | 2       | 4, 5, 6    |
-
-These are **lab-only credentials**. Never reuse them outside the lab.
-
----
-
-## Lab Modes
-
-The lab runs in two modes, controlled by the `LAB_MODE` environment variable:
-
-### Secure Mode (Default)
+Note ids are deterministic: the seed truncates both tables and resets SQLite's autoincrement counters, so Alice is always 1–3 and Bob is always 4–6. That is what makes "change the id from `1` to `4`" reproducible on camera. Re-run `pnpm db:seed` any time you have mutated the data. To list the ids yourself:
 
 ```bash
-LAB_MODE=secure pnpm dev
-# or: pnpm lab:secure
-```
-
-All vulnerabilities are fixed. This is the default if `LAB_MODE` is not set.
-
-### Vulnerable Mode
-
-```bash
-LAB_MODE=vulnerable pnpm dev
-# or: pnpm lab:vulnerable
-```
-
-The three vulnerabilities are active. A large banner prints to stderr on startup, making it impossible to run unaware.
-
----
-
-## API Reference
-
-Base URL: `http://127.0.0.1:3000/api`
-
-All endpoints except authentication require an `Authorization: Bearer <token>` header.
-
-### Authentication
-
-#### POST `/auth/register`
-
-Register a new user.
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Charlie",
-    "email": "charlie@example.local",
-    "password": "SecurePass123!"
-  }'
-```
-
-Response: `201 Created`
-
-```json
-{
-  "user": {
-    "id": 3,
-    "name": "Charlie",
-    "email": "charlie@example.local",
-    "role": "USER",
-    "createdAt": "2024-01-15T10:30:00.000Z"
-  },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-#### POST `/auth/login`
-
-Log in and receive a JWT.
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "alice@example.local",
-    "password": "Password123!"
-  }'
-```
-
-Response: `200 OK`
-
-```json
-{
-  "user": {
-    "id": 1,
-    "name": "Alice",
-    "email": "alice@example.local",
-    "role": "USER",
-    "createdAt": "..."
-  },
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-### Users
-
-#### GET `/users/me`
-
-Retrieve the authenticated user's profile.
-
-```bash
-curl -X GET http://127.0.0.1:3000/api/users/me \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Response: `200 OK` (secure mode)
-
-```json
-{
-  "user": {
-    "id": 1,
-    "name": "Alice",
-    "email": "alice@example.local",
-    "role": "USER",
-    "createdAt": "2024-01-15T10:00:00.000Z"
-  }
-}
-```
-
-**Vulnerable mode** leaks `passwordHash` and `resetToken`.
-
-#### PATCH `/users/me`
-
-Update the authenticated user's name or email.
-
-```bash
-curl -X PATCH http://127.0.0.1:3000/api/users/me \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice Updated"}'
-```
-
-Response: `200 OK`
-
-**Vulnerable mode** accepts any field, including `{"role":"ADMIN"}`.
-
-### Notes
-
-#### GET `/notes`
-
-List all notes owned by the authenticated user.
-
-```bash
-curl -X GET http://127.0.0.1:3000/api/notes \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Response: `200 OK`
-
-```json
-{
-  "notes": [
-    {
-      "id": 3,
-      "title": "Weekend reading list",
-      "content": "A few articles to read this weekend.",
-      "userId": 1,
-      "createdAt": "2024-01-15T10:15:00.000Z",
-      "updatedAt": "2024-01-15T10:15:00.000Z"
-    }
-  ]
-}
-```
-
-Notes are always returned in reverse-chronological order.
-
-#### POST `/notes`
-
-Create a new note.
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/notes \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "My note",
-    "content": "Note content here"
-  }'
-```
-
-Response: `201 Created`
-
-#### GET `/notes/:id`
-
-Retrieve a note by ID.
-
-```bash
-curl -X GET http://127.0.0.1:3000/api/notes/1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Response: `200 OK` (secure) — only if the note is owned by the user
-Response: `404 Not Found` (secure) — if the note doesn't exist or isn't owned
-Response: `200 OK` (vulnerable) — **any** note, owned or not (V1)
-
-#### PATCH `/notes/:id`
-
-Update a note (must be owned).
-
-```bash
-curl -X PATCH http://127.0.0.1:3000/api/notes/1 \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title": "Updated title"}'
-```
-
-#### DELETE `/notes/:id`
-
-Delete a note (must be owned).
-
-```bash
-curl -X DELETE http://127.0.0.1:3000/api/notes/1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Response: `204 No Content`
-
-### Health
-
-#### GET `/health`
-
-Check server status and lab mode.
-
-```bash
-curl http://127.0.0.1:3000/health
-```
-
-Response: `200 OK`
-
-```json
-{ "status": "ok", "labMode": "vulnerable" }
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/notes | jq '.notes[].id'
 ```
 
 ---
 
-## Demonstrating the Vulnerabilities
+## Vulnerable vs secure mode
 
-Detailed walkthroughs for each vulnerability are in [docs/lab-guide.md](docs/lab-guide.md).
-
-### Quick example: V1 — IDOR
-
-In vulnerable mode, Alice's token can read Bob's note:
+One environment variable, `LAB_MODE`, selects which implementation the three affected routes use. It **defaults to `secure`** — the vulnerable build must be opted into explicitly.
 
 ```bash
-# Get Alice's token
-TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"alice@example.local","password":"Password123!"}' | jq -r '.token')
+pnpm lab:secure        # the fixed build
+pnpm lab:vulnerable    # the insecure build (prints a warning banner to stderr)
+```
 
-# Alice tries to read Bob's note (id 4)
-curl http://127.0.0.1:3000/api/notes/4 -H "Authorization: Bearer $TOKEN"
-# Vulnerable mode: 200 OK, returns Bob's note
-# Secure mode: 404 Not Found
+The same three requests, side by side:
+
+| Request (as Alice)                       | Vulnerable                         | Secure                                     |
+| ---------------------------------------- | ---------------------------------- | ------------------------------------------ |
+| `GET /api/notes/4` (Bob's note)          | `200` + Bob's note                 | `404`                                      |
+| `GET /api/users/me`                      | leaks `passwordHash`, `resetToken` | exactly `id, name, email, role, createdAt` |
+| `PATCH /api/users/me` `{"role":"ADMIN"}` | `200`, role becomes `ADMIN`        | `400 VALIDATION_ERROR`, role unchanged     |
+
+Two demo branches hold the code with the switch stripped out, so the fix is a clean diff:
+
+```bash
+git switch vulnerable   # only the insecure implementation
+git switch secure       # only the fixed implementation
+
+git diff vulnerable secure -- src/services src/schemas
+# 3 files changed, 37 insertions(+), 7 deletions(-)
 ```
 
 ---
 
-## Running Tests
+## API overview
 
-```bash
-# Run all tests once
-pnpm test
+All bodies are JSON. Every route except `/health` and `/api/auth/*` requires `Authorization: Bearer <token>`.
 
-# Run tests in watch mode
-pnpm test:watch
+| Method   | Path                 | Auth | Purpose                                      |
+| -------- | -------------------- | ---- | -------------------------------------------- |
+| `POST`   | `/api/auth/register` | —    | Create an account, returns `{ user, token }` |
+| `POST`   | `/api/auth/login`    | —    | Log in, returns `{ user, token }`            |
+| `GET`    | `/api/users/me`      | ✓    | Current user's profile — **V3**              |
+| `PATCH`  | `/api/users/me`      | ✓    | Update own profile — **V2**                  |
+| `GET`    | `/api/notes`         | ✓    | List the caller's own notes                  |
+| `POST`   | `/api/notes`         | ✓    | Create a note                                |
+| `GET`    | `/api/notes/:id`     | ✓    | Fetch one note — **V1**                      |
+| `PATCH`  | `/api/notes/:id`     | ✓    | Update own note                              |
+| `DELETE` | `/api/notes/:id`     | ✓    | Delete own note                              |
+| `GET`    | `/health`            | —    | Liveness plus the active `labMode`           |
+
+Resources are wrapped (`{ user }`, `{ note }`, `{ notes }`). Errors use one envelope:
+
+```json
+{ "error": { "message": "Note not found", "code": "NOT_FOUND" } }
 ```
 
-Tests are located in `tests/` and cover:
-
-- **Auth security** — password hashing, JWT, token validation (both modes)
-- **Vulnerable behaviour** — proves all three exploits work in vulnerable mode
-- **Secure fixes** — proves all three are fixed in secure mode
+Copy-paste request and response examples for every endpoint are in **[docs/lab-guide.md](docs/lab-guide.md)**.
 
 ---
+
+## Tests
+
+85 tests prove both the exploits and the fixes in a single run, by mounting a vulnerable app and a secure app against the same database.
+
+```bash
+pnpm test          # run once
+pnpm test:watch    # watch mode
+```
+
+| Suite                      | What it proves                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `tests/vulnerable.test.ts` | Each exploit succeeds, plus negative controls asserting the lab has exactly three bugs               |
+| `tests/secure.test.ts`     | The same requests are blocked — 404, 400, and a five-key user object                                 |
+| `tests/auth.test.ts`       | Authentication is correct in both modes: forged, expired, wrong-issuer and `alg:none` tokens all 401 |
+
+The suite uses its own `prisma/test.db` and never touches your seeded lab data.
+
+---
+
+## Documentation
+
+| Document                                               | Contents                                                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| **[docs/vulnerabilities.md](docs/vulnerabilities.md)** | Per-vulnerability: root cause, vulnerable code, reproduction, impact, secure fix, lesson |
+| **[docs/lab-guide.md](docs/lab-guide.md)**             | Copy-paste `curl` walkthrough for each vulnerability, plus raw Burp Repeater requests    |
+| **[docs/architecture.md](docs/architecture.md)**       | Layers, the `LAB_MODE` selector design, auth and error handling, design decisions        |
+| **[SECURITY.md](SECURITY.md)**                         | What is intentional, and how to report an _unintended_ vulnerability                     |
+
+---
+
+## Tech stack
+
+Node.js 20+ · TypeScript 5.9 (strict) · Express 5.2 · Prisma 6.19 + SQLite · Zod 4.6 · bcrypt 6 · jsonwebtoken 9 · Vitest 3.2 + Supertest · Docker · pnpm
+
+### Project layout
+
+```
+src/
+├── server.ts            # bootstrap: loopback bind, warning banner, graceful shutdown
+├── app.ts               # createApp({ labMode }) — a factory, so tests mount both builds
+├── config/env.ts        # Zod-validated environment, fails closed to secure
+├── middleware/          # requireAuth (JWT + DB lookup), centralized error handler
+├── routes/              # auth · users · notes
+├── schemas/             # Zod contracts — user.schema.ts is the V2 fix
+├── services/            # notes.service.ts (V1) · users.service.ts (V2, V3)
+└── utils/jwt.ts         # HS256, algorithm and issuer pinned
+```
+
+The three switched operations each resolve through a single selector, so `LAB_MODE` is never read inside a handler, a service body, or middleware.
+
+---
+
+## Scripts
+
+| Command                                        | What it does                                                   |
+| ---------------------------------------------- | -------------------------------------------------------------- |
+| `pnpm lab:vulnerable` / `pnpm lab:secure`      | Start the API in a specific mode                               |
+| `pnpm dev`                                     | Start using whatever `LAB_MODE` your `.env` sets               |
+| `pnpm db:reset`                                | Sync the schema and re-seed (`prisma db push && pnpm db:seed`) |
+| `pnpm db:seed`                                 | Re-seed only — resets Alice and Bob to a known state           |
+| `pnpm db:nuke`                                 | Delete `prisma/dev.db`, then rebuild and re-seed it            |
+| `pnpm db:studio`                               | Browse the database in Prisma Studio                           |
+| `pnpm test` / `pnpm test:watch`                | Run the test suite                                             |
+| `pnpm typecheck` · `pnpm lint` · `pnpm format` | Quality gates                                                  |
+| `pnpm build` / `pnpm start`                    | Compile to `dist/` and run the compiled server                 |
+
+The lab uses `prisma db push` rather than a migration history — it is a disposable SQLite teaching database, and the seed is the source of truth. `pnpm prisma db seed` also works if you prefer the Prisma CLI directly.
+
+## Environment variables
+
+Copy `.env.example` to `.env`. Every value in it is a fake, lab-only placeholder.
+
+| Variable         | Default              | Notes                                                    |
+| ---------------- | -------------------- | -------------------------------------------------------- |
+| `DATABASE_URL`   | `file:./dev.db`      | SQLite file used by Prisma                               |
+| `JWT_SECRET`     | _(fake value)_       | Minimum 32 characters, enforced at boot                  |
+| `JWT_EXPIRES_IN` | `1h`                 | Validated at boot                                        |
+| `BCRYPT_COST`    | `12`                 | Tests drop this to 4 for speed                           |
+| `LAB_MODE`       | `secure`             | **Fails closed.** `.env.example` opts in to `vulnerable` |
+| `PORT` / `HOST`  | `3000` / `127.0.0.1` | Loopback by default                                      |
+| `NODE_ENV`       | `development`        | `production` + `vulnerable` refuses to start             |
 
 ## Docker
 
-### Using docker-compose
-
-Run the lab in vulnerable mode:
+Both services are profile-gated, so a bare `docker compose up` starts nothing rather than silently handing you the insecure build.
 
 ```bash
-docker compose --profile vulnerable up
+docker compose --profile vulnerable up   # http://127.0.0.1:3000
+docker compose --profile secure up       # http://127.0.0.1:3001
 ```
 
-This starts the vulnerable instance at `http://127.0.0.1:3000`.
-
-Run in secure mode:
+The image sets `HOST=0.0.0.0` internally; what keeps it local is the `127.0.0.1:` prefix on the published port. If you run the image by hand, keep that prefix:
 
 ```bash
-docker compose --profile secure up
-```
-
-The secure instance runs at `http://127.0.0.1:3001`.
-
-Both modes bind to `127.0.0.1` by default (loopback only) via the `127.0.0.1:` prefix in the port mapping. This prevents exposure to the local network.
-
-### Using docker run directly
-
-If running the image without docker-compose, **use loopback binding** to keep the vulnerable API isolated:
-
-```bash
-# CORRECT — binds to loopback only
-docker run -p 127.0.0.1:3000:3000 vulnerable-node-api-lab
-
-# WRONG — exposes to the local network and any attacker on it
-docker run -p 3000:3000 vulnerable-node-api-lab
-```
-
-Always use the `127.0.0.1:` prefix in the `-p` flag when running the vulnerable build.
-
----
-
-## Repository Structure
-
-```
-.
-├─ README.md                          # This file
-├─ SECURITY.md                        # Security policy
-├─ .env.example                       # Example environment variables
-├─ package.json                       # Dependencies and scripts
-├─ pnpm-lock.yaml
-├─ tsconfig.json
-├─ vitest.config.ts
-├─ Dockerfile                         # Multi-stage container build
-├─ docker-compose.yml
-├─ src/
-│  ├─ server.ts                       # HTTP server entry point
-│  ├─ app.ts                          # Express app factory
-│  ├─ config/env.ts                   # Environment configuration
-│  ├─ lib/prisma.ts                   # Prisma client singleton
-│  ├─ middleware/
-│  │  ├─ auth.ts                      # JWT middleware
-│  │  └─ error-handler.ts             # Error handling
-│  ├─ routes/
-│  │  ├─ auth.routes.ts               # /auth endpoints
-│  │  ├─ users.routes.ts              # /users endpoints
-│  │  └─ notes.routes.ts              # /notes endpoints
-│  ├─ services/
-│  │  ├─ auth.service.ts              # Auth logic
-│  │  ├─ users.service.ts             # User logic (vulnerable + secure)
-│  │  └─ notes.service.ts             # Notes logic (vulnerable + secure)
-│  └─ schemas/
-│     ├─ auth.schema.ts               # Zod validation schemas
-│     ├─ user.schema.ts
-│     └─ note.schema.ts
-├─ prisma/
-│  ├─ schema.prisma                   # Database schema
-│  ├─ seed.ts                         # Database seed
-│  └─ dev.db                          # SQLite database (gitignored)
-├─ tests/
-│  ├─ auth.test.ts                    # Auth tests (both modes)
-│  ├─ vulnerable.test.ts              # Vulnerability proofs
-│  └─ secure.test.ts                  # Secure fixes validation
-└─ docs/
-   ├─ architecture.md                 # System design & LAB_MODE
-   ├─ vulnerabilities.md              # Per-vulnerability deep dive
-   └─ lab-guide.md                    # Step-by-step walkthrough
+docker run -p 127.0.0.1:3000:3000 vulnerable-notes-api   # correct
+docker run -p 3000:3000 vulnerable-notes-api             # WRONG — exposes it to your network
 ```
 
 ---
 
-## Environment Variables
+## Learning objectives
 
-Rename `.env.example` to `.env` and customize if needed:
+After working through this lab you should be able to:
 
-| Variable         | Default         | Purpose                                |
-| ---------------- | --------------- | -------------------------------------- |
-| `DATABASE_URL`   | `file:./dev.db` | SQLite database location               |
-| `JWT_SECRET`     | (from .env)     | Secret for signing JWTs (≥32 chars)    |
-| `JWT_EXPIRES_IN` | `1h`            | JWT expiry time                        |
-| `BCRYPT_COST`    | `12`            | bcrypt work factor (4–15)              |
-| `LAB_MODE`       | `secure`        | `vulnerable` or `secure`               |
-| `PORT`           | `3000`          | HTTP port                              |
-| `HOST`           | `127.0.0.1`     | Bind address (localhost only)          |
-| `NODE_ENV`       | `development`   | `development`, `test`, or `production` |
+1. Explain why **authentication is not authorization**, and spot a missing object-level ownership check in a code review.
+2. Scope an object lookup to the authenticated user, and say why a `404` beats a `403` when the resource exists but is not yours.
+3. Recognise mass assignment, and explain why the server — not the client, and not the frontend form — decides which fields may be written.
+4. Apply an explicit allowlist rather than a denylist, and know why `data: { ...input }` still fails the test that `data: { name: input.name }` passes.
+5. Treat the response shape as a deliberate decision, using `select` and a DTO instead of serialising an ORM model.
+6. Explain why a leaked `passwordHash` still matters even though it is hashed, and why a leaked `resetToken` is an account-takeover primitive.
+7. Write tests that prove both the exploit and the fix.
 
----
+## YouTube series
 
-## Branch Strategy
+Part of **Cybersecurity for Developers** — a "Build → Break → Secure" series.
 
-Three branches are maintained:
-
-- **`main`** — Complete lab with both implementations and the `LAB_MODE` selector. This is the recommended branch to clone.
-- **`vulnerable`** — Stripped down to the vulnerable code paths only, for isolated demonstration.
-- **`secure`** — Stripped down to the secure code paths only, for comparison.
-
-Switch branches to see only the implementation you need:
-
-```bash
-git switch vulnerable   # Vulnerable paths only
-git switch secure       # Secure paths only
-git switch main         # Both (default)
-```
-
-Run `git diff vulnerable secure -- src/services src/schemas` to see exactly what changes
-between the two implementations: three files, 37 insertions and 7 deletions.
-
-The wider `git diff vulnerable secure -- src/` also shows `config/env.ts` and `server.ts`,
-because the production-mode refusal and the startup warning banner only exist on the
-vulnerable branch. That difference is deliberate — the safety scaffolding belongs to the
-insecure build, not to the fixed one.
-
----
-
-## Learning Objectives
-
-After completing this lab, you should understand:
-
-1. **Authorization ≠ Authentication** — Just because a user is logged in doesn't mean they can access every resource.
-2. **Ownership checks are mandatory** — Every resource endpoint must verify the caller owns the resource.
-3. **Client input is not a security boundary** — The frontend never renders a `role` field, but the API must reject it anyway.
-4. **Data exposure is real risk** — Hashed passwords can be cracked offline; leaked tokens are account-takeover vectors.
-5. **Response shaping is a security decision** — Explicit DTOs and database `select` statements prevent accidental leaks.
-
----
-
-## What This Lab Doesn't Cover
-
-This lab focuses on three vulnerabilities and omits:
-
-- **SQL injection** — Prisma parameterizes queries
-- **JWT key confusion** — The secure implementation pins `HS256`
-- **Weak password hashing** — bcrypt is correct in both modes
-- **Refresh tokens** — Out of scope for a focused lab
-- **Rate limiting** — A known simplification
-- **CORS misconfiguration** — Not a focus
-
-A future video series will cover JWT-specific flaws in depth.
-
----
-
-## References
-
-- **OWASP API Security Top 10 (2023)**
-  - [API1:2023 — Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0x01-index/)
-  - [API3:2023 — Broken Object Property Level Authorization](https://owasp.org/API-Security/editions/2023/en/0x01-index/)
-
-- **Prisma Documentation**
-  - [Query operations](https://www.prisma.io/docs/concepts/components/prisma-client)
-
-- **Zod Documentation**
-  - [Validation schemas](https://zod.dev)
-
----
+**Walkthrough video: coming soon.**
 
 ## Contributing
 
-This is an educational repository. Issues and pull requests are welcome for:
-
-- Documentation clarity
-- Test coverage improvements
-- Code style consistency
-- Typo fixes
-
-Do not open issues to request additional vulnerabilities or changes to the three core ones — the lab is intentionally scoped.
-
----
+This is a teaching lab with a deliberately fixed scope: three vulnerabilities, no more. Corrections to the documentation, the tests, or the _non-vulnerable_ code are welcome. Please do not submit pull requests that add further vulnerabilities.
 
 ## License
 
-MIT
+[MIT](LICENSE) — free to use for teaching, learning, and training.
 
----
+## Disclaimer
 
-## YouTube Series
-
-This lab is the teaching artifact for **Cybersecurity for Developers**, a video series on building secure applications.
-
-- [YouTube playlist](https://youtube.com/playlist) (placeholder)
-
----
-
-## Support
-
-- **Installation issues** — Check [.env.example](.env.example) and ensure Node.js 20+ is installed.
-- **API questions** — See [docs/lab-guide.md](docs/lab-guide.md) for curl examples.
-- **Vulnerability details** — Read [docs/vulnerabilities.md](docs/vulnerabilities.md).
-- **Architecture** — See [docs/architecture.md](docs/architecture.md).
-- **Security issues** — See [SECURITY.md](SECURITY.md).
-
----
-
-**Last updated:** 2024 | [View on GitHub](#)
+This software is provided for **education only**. The insecure code paths exist to be studied, not shipped. You are responsible for how you run it: keep it on a machine you own, keep it off the public internet, and only ever test systems you have explicit permission to test. The author accepts no liability for misuse or for any damage resulting from running this software.

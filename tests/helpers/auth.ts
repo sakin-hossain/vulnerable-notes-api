@@ -72,7 +72,7 @@ export async function createNote(
  * `{ sub }` alone. These factories each break exactly ONE of those rules, so a
  * failing assertion points at a single cause.
  */
-const ISSUER = 'vulnerable-node-api-lab';
+const ISSUER = 'vulnerable-notes-api';
 
 type TokenSubject = { id: number };
 

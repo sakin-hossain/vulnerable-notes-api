@@ -1,5 +1,5 @@
 {
-  "name": "vulnerable-node-api-lab",
+  "name": "vulnerable-notes-api",
   "version": "1.0.0",
   "private": true,
   "description": "An intentionally vulnerable Node.js + TypeScript API for teaching application security to developers. Educational use only — never deploy publicly.",
@@ -28,6 +28,9 @@
     "lab:vulnerable": "cross-env LAB_MODE=vulnerable tsx watch src/server.ts",
     "lab:secure": "cross-env LAB_MODE=secure tsx watch src/server.ts",
     "db:nuke": "node -e \"require('fs').rmSync('prisma/dev.db',{force:true})\" && pnpm db:reset"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",

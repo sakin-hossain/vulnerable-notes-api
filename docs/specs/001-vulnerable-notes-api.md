@@ -1,4 +1,8 @@
-# Spec 001 — Vulnerable Node.js API Lab ("Private Notes API")
+# Spec 001 — Vulnerable Notes API ("Private Notes API")
+
+> **Internal planning document.** Kept for provenance. The shipped behaviour is
+> described in [docs/vulnerabilities.md](../vulnerabilities.md); where this spec and
+> the code disagree, the code is correct.
 
 Status: APPROVED (planning complete)
 Owner: PLANNER (architect-reviewer)
@@ -133,7 +137,7 @@ model Note {
 Seed (`prisma/seed.ts`): Alice and Bob, both `role = "USER"`, both with a fictional
 `resetToken` (e.g. `"lab-reset-token-alice-not-a-real-secret"`), plus 3 fictional notes
 each. Bob's notes must contain an obviously private-looking (but fictional) string such as
-`"Bob's private note — bank PIN is 0000 (fictional lab data)"` so the IDOR demo lands on
+`"Private release notes — production migration scheduled Friday."` so the IDOR demo lands on
 camera. Seed is idempotent (`upsert` by email) and re-hashes passwords with the configured
 bcrypt cost.
 
@@ -202,7 +206,7 @@ Validation rules: `name` 1–80 chars trimmed; `email` `z.string().email()` lowe
   `401 { code: "INVALID_CREDENTIALS" }` for unknown email and wrong password (no user
   enumeration). `passwordHash` is never selected into a response.
 - **Tokens** — `jsonwebtoken`, HS256, `env.JWT_SECRET` (Zod-validated, min 32 chars),
-  `expiresIn` from `env.JWT_EXPIRES_IN` (default `1h`), `issuer: "vulnerable-node-api-lab"`,
+  `expiresIn` from `env.JWT_EXPIRES_IN` (default `1h`), `issuer: "vulnerable-notes-api"`,
   `subject: user.id`. Verification **pins** `{ algorithms: ['HS256'], issuer }` — this
   closes algorithm-confusion and is called out in the video as "the part we got right".
   Payload carries `sub` only; no PII, no secrets.
@@ -408,7 +412,7 @@ primitive in a real app.
 │  ├─ vulnerabilities.md        # the three: cause, exploit, fix, OWASP ref
 │  ├─ lab-guide.md              # copy-paste curl walkthrough, per episode
 │  ├─ tasks.md
-│  └─ specs/001-vulnerable-node-api-lab.md
+│  └─ specs/001-vulnerable-notes-api.md
 ├─ prisma/
 │  ├─ schema.prisma
 │  ├─ seed.ts

@@ -1,6 +1,6 @@
 # Vulnerabilities Guide
 
-This document details the three intentional vulnerabilities in the Vulnerable Node.js API Lab, their root causes, how to reproduce them, and how they are fixed.
+This document details the three intentional vulnerabilities in the Vulnerable Notes API, their root causes, how to reproduce them, and how they are fixed.
 
 All reproduction commands target `http://127.0.0.1:3000` (adjust the host/port if needed).
 
@@ -312,45 +312,13 @@ Output: `"ADMIN"` — the escalation is permanent.
 
 The `role` key is rejected as unknown. The database is unchanged. Alice's role is still `"USER"`.
 
-### A Stronger Exploit: Re-Parenting Notes
+### Scope of the bug
 
-Mass assignment reaches **nested relations** in Prisma, not just scalar fields. This allows an attacker to re-parent another user's notes:
-
-**Prerequisites:** Lab running in vulnerable mode, Alice and Bob seeded with notes (Alice owns 1–3, Bob owns 4–6).
-
-**Step 1: Get Alice's token**
-
-```bash
-ALICE_TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"alice@example.local","password":"Password123!"}' | jq -r '.token')
-```
-
-**Step 2: Re-parent Bob's note by connecting it to Alice**
-
-```bash
-curl -X PATCH http://127.0.0.1:3000/api/users/me \
-  -H "Authorization: Bearer $ALICE_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"notes":{"connect":{"id":4}}}' | jq
-```
-
-**Expected Result (vulnerable mode):** `200 OK`
-
-The request succeeds. Bob's note 4 is re-parented to Alice. Verify:
-
-```bash
-curl http://127.0.0.1:3000/api/notes \
-  -H "Authorization: Bearer $ALICE_TOKEN" | jq '.notes[].id'
-```
-
-Output: Alice's notes are now 4, 3, 2, 1 (note 4 appears, sorted by creation date descending).
-
-**Why this is dangerous:** Mass assignment is not limited to scalar fields like `role`; it reaches ORM relations. An attacker can modify a user's relationships to other entities (notes, messages, projects, etc.), not just their attributes. This is a more sophisticated form of the same vulnerability — the root cause is the unchecked cast.
-
-**Expected Result (secure mode):** `400 Bad Request`
-
-The `notes` key is rejected as unknown. The database is unchanged. Bob retains ownership of note 4.
+`data: body` writes whatever the client sends, so the reachable surface is every
+field Prisma will accept on this model — not just `role`. Episode 1 stays on the
+role escalation because that is the clearest, most consequential case, but when
+you fix this class of bug, fix it as "the client cannot choose which fields get
+written", not as "block the `role` key".
 
 ### Security Impact
 
@@ -663,7 +631,7 @@ The lab deliberately implements the following correctly, even in vulnerable mode
 | Password hashing | bcrypt (not MD5, plaintext, or weak salts)                         | Cost is configurable for testing                                            |
 | Login errors     | Identical for unknown email and wrong password on login            | Registration and PATCH return 409 on duplicate email (documented trade-off) |
 | List operations  | Owner-scoped in both modes (`GET /api/notes`)                      | Only the caller's notes returned                                            |
-| Update/delete    | Owner-scoped in both modes on note routes                          | 404 when not owned; V2 can still re-parent notes                            |
+| Update/delete    | Owner-scoped in both modes on the note routes                      | 404 when the note is not yours                                              |
 | Error responses  | No stack traces in either mode                                     | Logged to stderr, never in HTTP responses                                   |
 | Server binding   | Defaults to `127.0.0.1`; Docker publishes with `127.0.0.1:` prefix | Docker is safe; bare `docker run -p 3000:3000` would expose                 |
 | Note creation    | `userId` from token, not from request body                         | Spoofed `userId` is rejected                                                |
