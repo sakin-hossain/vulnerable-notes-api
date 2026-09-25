@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import type { LabMode } from '../config/env';
 import { requireAuth, requireUser } from '../middleware/auth';
 import { createNoteSchema, noteIdParamSchema, updateNoteSchema } from '../schemas/note.schema';
 import {
@@ -10,7 +9,7 @@ import {
   updateNote,
 } from '../services/notes.service';
 
-export function createNotesRouter(labMode: LabMode): Router {
+export function createNotesRouter(): Router {
   const router = Router();
   router.use(requireAuth);
 
@@ -30,7 +29,7 @@ export function createNotesRouter(labMode: LabMode): Router {
   router.get('/:id', async (req, res) => {
     const { id: userId } = requireUser(req);
     const { id: noteId } = noteIdParamSchema.parse(req.params);
-    const note = await getNoteById(labMode)({ noteId, userId });
+    const note = await getNoteById({ noteId, userId });
     res.status(200).json({ note });
   });
 

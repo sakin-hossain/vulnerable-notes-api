@@ -1,5 +1,9 @@
 # Vulnerable Notes API
 
+> **You are on the `vulnerable` branch.** Every switched endpoint here uses the
+> insecure implementation. The fixed code lives on the `secure` branch, and the
+> full lab with both implementations lives on `main`.
+
 A small, intentionally insecure Node.js + TypeScript REST API that demonstrates three real application-security bugs — and their fixes — from the perspective of the developer who writes them.
 
 > ### ⚠️ EDUCATIONAL SECURITY LAB

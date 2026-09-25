@@ -12,7 +12,7 @@ import {
   expectNoLeakedInternals,
   expectPublicUserShape,
 } from './helpers/assertions';
-import { LAB_MODES, makeApp } from './helpers/app';
+import { makeApp } from './helpers/app';
 import {
   ALICE,
   BOB,
@@ -36,8 +36,8 @@ beforeEach(async () => {
   await resetDb();
 });
 
-describe.each(LAB_MODES)('auth in %s mode', (labMode) => {
-  const app = makeApp(labMode);
+describe('auth', () => {
+  const app = makeApp();
 
   describe('A1 — registration returns a token and only public user fields', () => {
     it('returns 201 with a token and a user object', async () => {
@@ -269,19 +269,19 @@ describe.each(LAB_MODES)('auth in %s mode', (labMode) => {
     });
   });
 
-  describe('A8 — the health endpoint reports which build is running', () => {
-    it('returns 200 with status ok and the lab mode of this app', async () => {
+  describe('A8 — the health endpoint answers without a token', () => {
+    it('returns 200 with status ok', async () => {
       const res = await request(app).get('/health');
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ status: 'ok', labMode });
+      expect(res.body).toEqual({ status: 'ok' });
     });
 
-    it('needs no authentication, so the operator can always check the mode', async () => {
+    it('needs no authentication, so the operator can always probe liveness', async () => {
       const res = await request(app).get('/health').set('Authorization', 'Bearer nonsense');
 
       expect(res.status).toBe(200);
-      expect(res.body.labMode).toBe(labMode);
+      expect(res.body.status).toBe('ok');
     });
   });
 
